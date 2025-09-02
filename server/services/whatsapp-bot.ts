@@ -15,10 +15,73 @@ export class WhatsAppBot {
   private sock: WASocket | null = null;
   private musicService: MusicService;
   private qrCode: string | null = null;
+  private linkCode: string | null = null;
+  private phoneNumber: string | null = null;
   private connectionStatus: string = 'disconnected';
 
   constructor() {
     this.musicService = new MusicService();
+  }
+
+  async requestLinkCode(phoneNumber: string) {
+    try {
+      this.phoneNumber = phoneNumber;
+      const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+      
+      this.sock = makeWASocket({
+        auth: state,
+        mobile: true,
+        browser: ['WhatsApp Bot', 'Chrome', '1.0.0']
+      });
+
+      this.sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
+        
+        if (connection === 'close') {
+          const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+          
+          if (shouldReconnect) {
+            await this.logActivity('warning', 'whatsapp', 'Connection closed, attempting to reconnect...');
+            setTimeout(() => this.requestLinkCode(phoneNumber), 3000);
+          } else {
+            await this.updateSessionStatus('disconnected');
+            await this.logActivity('error', 'whatsapp', 'WhatsApp connection logged out');
+          }
+        } else if (connection === 'open') {
+          this.connectionStatus = 'connected';
+          await this.updateSessionStatus('connected');
+          await this.logActivity('info', 'whatsapp', 'WhatsApp connection established');
+          await this.updateGroupsList();
+        }
+      });
+
+      this.sock.ev.on('creds.update', saveCreds);
+      this.sock.ev.on('messages.upsert', this.handleMessage.bind(this));
+      this.sock.ev.on('group-participants.update', this.handleGroupUpdate.bind(this));
+
+      // Request pairing code
+      const code = await this.sock.requestPairingCode(phoneNumber);
+      this.linkCode = code;
+      await this.updateSessionStatus('waiting-for-code');
+      await this.logActivity('info', 'system', `Link code generated: ${code}`);
+      
+    } catch (error) {
+      await this.logActivity('error', 'system', `Failed to request link code: ${error}`);
+      throw error;
+    }
+  }
+
+  async verifyLinkCode(code: string): Promise<boolean> {
+    try {
+      if (this.linkCode === code) {
+        // The connection should automatically proceed once the correct code is provided
+        return true;
+      }
+      return false;
+    } catch (error) {
+      await this.logActivity('error', 'system', `Failed to verify link code: ${error}`);
+      return false;
+    }
   }
 
   async startBot() {
@@ -27,7 +90,6 @@ export class WhatsAppBot {
       
       this.sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
         browser: ['WhatsApp Bot', 'Chrome', '1.0.0']
       });
 
@@ -404,12 +466,14 @@ export class WhatsAppBot {
     if (session) {
       await storage.updateBotSession(session.id, { 
         status,
+        phoneNumber: this.phoneNumber,
         qrCode: this.qrCode,
         connectedAt: status === 'connected' ? new Date() : session.connectedAt
       });
     } else {
       await storage.createBotSession({
         status,
+        phoneNumber: this.phoneNumber,
         qrCode: this.qrCode,
         connectedAt: status === 'connected' ? new Date() : undefined,
       });
@@ -441,6 +505,14 @@ export class WhatsAppBot {
 
   getQRCode() {
     return this.qrCode;
+  }
+
+  getLinkCode() {
+    return this.linkCode;
+  }
+
+  getPhoneNumber() {
+    return this.phoneNumber;
   }
 
   async broadcastMessage(message: string, groupIds?: string[]) {

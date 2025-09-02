@@ -13,12 +13,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const session = await storage.getBotSession();
       const connectionStatus = whatsappBot.getConnectionStatus();
       const qrCode = whatsappBot.getQRCode();
+      const linkCode = whatsappBot.getLinkCode();
+      const phoneNumber = whatsappBot.getPhoneNumber();
       
       res.json({
         status: connectionStatus,
         qrCode,
+        linkCode,
         session: session ? {
-          phoneNumber: session.phoneNumber,
+          phoneNumber: session.phoneNumber || phoneNumber,
           connectedAt: session.connectedAt,
           sessionId: session.id,
         } : null,
@@ -28,12 +31,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/bot/start", async (req, res) => {
+  app.post("/api/bot/request-link", async (req, res) => {
     try {
-      await whatsappBot.startBot();
-      res.json({ message: "Bot started successfully" });
+      const { phoneNumber } = req.body;
+      if (!phoneNumber) {
+        return res.status(400).json({ message: "Phone number is required" });
+      }
+      
+      await whatsappBot.requestLinkCode(phoneNumber);
+      res.json({ message: "Link code requested successfully" });
     } catch (error) {
-      res.status(500).json({ message: "Failed to start bot" });
+      res.status(500).json({ message: "Failed to request link code" });
+    }
+  });
+
+  app.post("/api/bot/verify-link", async (req, res) => {
+    try {
+      const { linkCode } = req.body;
+      if (!linkCode) {
+        return res.status(400).json({ message: "Link code is required" });
+      }
+      
+      const success = await whatsappBot.verifyLinkCode(linkCode);
+      if (success) {
+        res.json({ message: "Successfully connected to WhatsApp" });
+      } else {
+        res.status(400).json({ message: "Invalid link code" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to verify link code" });
     }
   });
 
@@ -238,14 +264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const httpServer = createServer(app);
 
-  // Start the WhatsApp bot automatically
-  setTimeout(async () => {
-    try {
-      await whatsappBot.startBot();
-    } catch (error) {
-      console.error("Failed to start WhatsApp bot:", error);
-    }
-  }, 2000);
+  // Auto-start removed - bot will start when user requests link code
 
   return httpServer;
 }

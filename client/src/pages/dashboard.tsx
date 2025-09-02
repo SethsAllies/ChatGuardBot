@@ -1,141 +1,196 @@
 import { useState } from "react";
-import Sidebar from "@/components/sidebar";
-import DashboardStats from "@/components/dashboard-stats";
-import RecentActivity from "@/components/recent-activity";
-import QuickActions from "@/components/quick-actions";
-import ConnectionStatus from "@/components/connection-status";
-import GroupsTable from "@/components/groups-table";
-import CommandsList from "@/components/commands-list";
-import LogsViewer from "@/components/logs-viewer";
-import QRCodeDisplay from "@/components/qr-code-display";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
 
-type TabType = 'dashboard' | 'connection' | 'groups' | 'commands' | 'music' | 'logs' | 'settings';
+interface BotStatus {
+  status: string;
+  linkCode?: string;
+  session?: {
+    phoneNumber?: string;
+    connectedAt?: string;
+    sessionId: string;
+  };
+}
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [linkCode, setLinkCode] = useState("");
 
-  const getTabTitle = (tab: TabType) => {
-    switch (tab) {
-      case 'dashboard': return 'Dashboard';
-      case 'connection': return 'Connection';
-      case 'groups': return 'Group Management';
-      case 'commands': return 'Bot Commands';
-      case 'music': return 'Music Queue';
-      case 'logs': return 'System Logs';
-      case 'settings': return 'Settings';
-      default: return 'Dashboard';
-    }
-  };
+  const { data: botStatus, isLoading } = useQuery<BotStatus>({
+    queryKey: ["/api/bot/status"],
+    refetchInterval: 3000,
+  });
 
-  const getTabDescription = (tab: TabType) => {
-    switch (tab) {
-      case 'dashboard': return 'Monitor and manage your WhatsApp bot';
-      case 'connection': return 'Manage WhatsApp connection and authentication';
-      case 'groups': return 'Manage groups and moderation settings';
-      case 'commands': return 'Configure and manage bot commands';
-      case 'music': return 'View and manage music queue';
-      case 'logs': return 'Monitor bot activity and debug issues';
-      case 'settings': return 'Configure bot settings and preferences';
-      default: return 'Monitor and manage your WhatsApp bot';
-    }
-  };
+  const requestLinkCodeMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/bot/request-link", { phoneNumber }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bot/status"] });
+      toast({ title: "Link code requested! Check your WhatsApp for the code." });
+    },
+    onError: () => {
+      toast({ title: "Failed to request link code", variant: "destructive" });
+    },
+  });
+
+  const submitLinkCodeMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/bot/verify-link", { linkCode }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bot/status"] });
+      toast({ title: "Successfully connected to WhatsApp!" });
+    },
+    onError: () => {
+      toast({ title: "Invalid link code", variant: "destructive" });
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/bot/disconnect"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bot/status"] });
+      toast({ title: "Disconnected successfully" });
+    },
+    onError: () => {
+      toast({ title: "Failed to disconnect", variant: "destructive" });
+    },
+  });
 
   return (
-    <div className="flex h-screen bg-background">
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
-      
-      <main className="flex-1 overflow-hidden">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="w-full max-w-md space-y-6">
         {/* Header */}
-        <header className="bg-card border-b border-border px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold">{getTabTitle(activeTab)}</h2>
-              <p className="text-muted-foreground">{getTabDescription(activeTab)}</p>
-            </div>
-            <ConnectionStatus />
+        <div className="text-center">
+          <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
+            <i className="fab fa-whatsapp text-primary-foreground text-2xl"></i>
           </div>
-        </header>
+          <h1 className="text-3xl font-bold">WhatsApp Bot</h1>
+          <p className="text-muted-foreground">Connect your WhatsApp account</p>
+        </div>
 
-        {/* Content */}
-        <div className="p-6 overflow-y-auto h-full">
-          {activeTab === 'dashboard' && (
-            <div>
-              <DashboardStats />
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                <RecentActivity />
-                <QuickActions onTabChange={(tab: string) => setActiveTab(tab as TabType)} />
+        {/* Connection Status */}
+        <div className="bg-card rounded-lg border border-border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Connection Status</h2>
+            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm ${
+              botStatus?.status === 'connected' ? 'bg-primary/10 text-primary' :
+              botStatus?.status === 'waiting-for-code' ? 'bg-yellow-500/10 text-yellow-500' :
+              'bg-muted text-muted-foreground'
+            }`}>
+              <div className={`w-2 h-2 rounded-full ${
+                botStatus?.status === 'connected' ? 'bg-primary' :
+                botStatus?.status === 'waiting-for-code' ? 'bg-yellow-500' :
+                'bg-muted-foreground'
+              }`}></div>
+              <span>
+                {botStatus?.status === 'connected' ? 'Connected' :
+                 botStatus?.status === 'waiting-for-code' ? 'Waiting for code' :
+                 'Disconnected'}
+              </span>
+            </div>
+          </div>
+
+          {botStatus?.status === 'connected' ? (
+            <div className="space-y-4">
+              <div className="text-center p-4 bg-primary/10 rounded-lg">
+                <i className="fas fa-check-circle text-primary text-2xl mb-2"></i>
+                <p className="font-medium">WhatsApp Connected!</p>
+                <p className="text-sm text-muted-foreground">
+                  Phone: {botStatus.session?.phoneNumber || 'Hidden'}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Connected: {botStatus.session?.connectedAt ? 
+                    new Date(botStatus.session.connectedAt).toLocaleString() : 'Recently'}
+                </p>
               </div>
-              <div className="bg-card rounded-lg border border-border">
-                <div className="p-6 border-b border-border">
-                  <h3 className="text-lg font-semibold">Connection Status</h3>
-                </div>
-                <div className="p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                        <i className="fab fa-whatsapp text-primary"></i>
-                      </div>
-                      <div>
-                        <p className="font-medium">WhatsApp Web</p>
-                        <p className="text-sm text-primary">Connected</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-chart-1/10 rounded-lg flex items-center justify-center">
-                        <i className="fas fa-server text-chart-1"></i>
-                      </div>
-                      <div>
-                        <p className="font-medium">Bot Server</p>
-                        <p className="text-sm text-primary">Online</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-chart-3/10 rounded-lg flex items-center justify-center">
-                        <i className="fas fa-database text-chart-3"></i>
-                      </div>
-                      <div>
-                        <p className="font-medium">Database</p>
-                        <p className="text-sm text-primary">Connected</p>
-                      </div>
-                    </div>
-                  </div>
+              <div className="bg-muted rounded-lg p-4">
+                <h3 className="font-medium mb-2">Available Commands:</h3>
+                <div className="text-sm space-y-1 text-muted-foreground">
+                  <p>• <span className="font-mono">/help</span> - Show all commands</p>
+                  <p>• <span className="font-mono">/kick @user</span> - Remove member (admin only)</p>
+                  <p>• <span className="font-mono">/play song name</span> - Play music</p>
+                  <p>• <span className="font-mono">/ping</span> - Check bot response</p>
+                  <p className="text-xs pt-2">Use these commands directly in your WhatsApp groups!</p>
                 </div>
               </div>
+              <Button 
+                variant="destructive" 
+                className="w-full"
+                onClick={() => disconnectMutation.mutate()}
+                disabled={disconnectMutation.isPending}
+              >
+                Disconnect WhatsApp
+              </Button>
             </div>
-          )}
-
-          {activeTab === 'connection' && (
-            <div className="max-w-4xl mx-auto">
-              <QRCodeDisplay />
+          ) : botStatus?.status === 'waiting-for-code' ? (
+            <div className="space-y-4">
+              <div className="text-center p-4 bg-yellow-500/10 rounded-lg">
+                <i className="fas fa-mobile-alt text-yellow-500 text-2xl mb-2"></i>
+                <p className="font-medium">Check your WhatsApp!</p>
+                <p className="text-sm text-muted-foreground">
+                  A link code has been sent to your WhatsApp. Enter it below.
+                </p>
+              </div>
+              <div className="space-y-3">
+                <Input
+                  type="text"
+                  placeholder="Enter link code from WhatsApp"
+                  value={linkCode}
+                  onChange={(e) => setLinkCode(e.target.value)}
+                  data-testid="input-link-code"
+                />
+                <Button 
+                  className="w-full"
+                  onClick={() => submitLinkCodeMutation.mutate()}
+                  disabled={submitLinkCodeMutation.isPending || !linkCode}
+                  data-testid="button-submit-code"
+                >
+                  Connect with Code
+                </Button>
+              </div>
             </div>
-          )}
-
-          {activeTab === 'groups' && (
-            <div className="max-w-6xl mx-auto">
-              <GroupsTable />
-            </div>
-          )}
-
-          {activeTab === 'commands' && (
-            <div className="max-w-6xl mx-auto">
-              <CommandsList />
-            </div>
-          )}
-
-          {activeTab === 'logs' && (
-            <div className="max-w-6xl mx-auto">
-              <LogsViewer />
-            </div>
-          )}
-
-          {(activeTab === 'music' || activeTab === 'settings') && (
-            <div className="bg-card rounded-lg border border-border p-6 text-center">
-              <h3 className="text-lg font-semibold mb-2">Coming Soon</h3>
-              <p className="text-muted-foreground">This section is under development.</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-3">
+                <label className="text-sm font-medium">Phone Number</label>
+                <Input
+                  type="tel"
+                  placeholder="+1234567890"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  data-testid="input-phone-number"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Include country code (e.g., +1 for US, +44 for UK)
+                </p>
+              </div>
+              <Button 
+                className="w-full"
+                onClick={() => requestLinkCodeMutation.mutate()}
+                disabled={requestLinkCodeMutation.isPending || !phoneNumber}
+                data-testid="button-request-code"
+              >
+                {requestLinkCodeMutation.isPending ? 'Requesting...' : 'Request Link Code'}
+              </Button>
             </div>
           )}
         </div>
-      </main>
+
+        {/* Instructions */}
+        <div className="bg-card rounded-lg border border-border p-6">
+          <h3 className="font-semibold mb-3">How it works:</h3>
+          <ol className="text-sm text-muted-foreground space-y-2">
+            <li>1. Enter your phone number with country code</li>
+            <li>2. Click "Request Link Code"</li>
+            <li>3. Check your WhatsApp for a message with the link code</li>
+            <li>4. Enter the code to connect your account</li>
+            <li>5. Use bot commands directly in your WhatsApp groups!</li>
+          </ol>
+        </div>
+      </div>
     </div>
   );
 }
